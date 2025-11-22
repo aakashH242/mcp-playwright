@@ -1,6 +1,7 @@
 import { BrowserToolBase } from './base.js';
 import { ToolContext, ToolResponse, createSuccessResponse, createErrorResponse } from '../common/types.js';
 import * as path from 'path';
+import { registerFileResource } from '../../resourceManager.js';
 
 /**
  * Tool for saving page as PDF
@@ -25,7 +26,21 @@ export class SaveAsPdfTool extends BrowserToolBase {
       };
 
       await page.pdf(options);
-      return createSuccessResponse(`Saved page as PDF: ${options.path}`);
+      let resourceLink;
+      try {
+        resourceLink = await registerFileResource({
+          filePath: options.path,
+          name: filename,
+          mimeType: 'application/pdf',
+          server: this.server,
+        });
+      } catch (error) {
+        console.warn("Failed to register PDF as resource:", error);
+      }
+      return {
+        ...createSuccessResponse(`Saved page as PDF: ${options.path}`),
+        ...(resourceLink ? { resourceLinks: [resourceLink] } : {}),
+      };
     });
   }
-} 
+}

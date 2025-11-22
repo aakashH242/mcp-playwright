@@ -1,4 +1,9 @@
-import type { CallToolResult, TextContent, ImageContent } from '@modelcontextprotocol/sdk/types.js';
+import type {
+  CallToolResult,
+  TextContent,
+  ImageContent,
+} from '@modelcontextprotocol/sdk/types.js';
+import type { ResourceLink } from '../../resourceManager.js';
 import type { Page, Browser, APIRequestContext } from 'playwright';
 
 // Context for tool execution
@@ -13,6 +18,7 @@ export interface ToolContext {
 export interface ToolResponse extends CallToolResult {
   content: (TextContent | ImageContent)[];
   isError: boolean;
+  resourceLinks?: ResourceLink[];
 }
 
 // Interface that all tool implementations must follow

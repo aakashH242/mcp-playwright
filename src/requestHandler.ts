@@ -1,12 +1,17 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { 
-  ListResourcesRequestSchema, 
-  ReadResourceRequestSchema, 
-  ListToolsRequestSchema, 
+import {
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
+  ListToolsRequestSchema,
   CallToolRequestSchema,
-  Tool
+  Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import { handleToolCall, getConsoleLogs, getScreenshots } from "./toolHandler.js";
+import {
+  handleToolCall,
+  getConsoleLogs,
+  getScreenshots,
+} from "./toolHandler.js";
+import { listFileResources, readFileResource } from "./resourceManager.js";
 
 export function setupRequestHandlers(server: Server, tools: Tool[]) {
   // List resources handler
@@ -17,11 +22,12 @@ export function setupRequestHandlers(server: Server, tools: Tool[]) {
         mimeType: "text/plain",
         name: "Browser console logs",
       },
-      ...Array.from(getScreenshots().keys()).map(name => ({
+      ...Array.from(getScreenshots().keys()).map((name) => ({
         uri: `screenshot://${name}`,
         mimeType: "image/png",
         name: `Screenshot: ${name}`,
       })),
+      ...(await listFileResources(server)),
     ],
   }));
 
@@ -32,11 +38,13 @@ export function setupRequestHandlers(server: Server, tools: Tool[]) {
     if (uri === "console://logs") {
       const logs = getConsoleLogs().join("\n");
       return {
-        contents: [{
-          uri,
-          mimeType: "text/plain",
-          text: logs,
-        }],
+        contents: [
+          {
+            uri,
+            mimeType: "text/plain",
+            text: logs,
+          },
+        ],
       };
     }
 
@@ -45,13 +53,29 @@ export function setupRequestHandlers(server: Server, tools: Tool[]) {
       const screenshot = getScreenshots().get(name);
       if (screenshot) {
         return {
-          contents: [{
-            uri,
-            mimeType: "image/png",
-            blob: screenshot,
-          }],
+          contents: [
+            {
+              uri,
+              mimeType: "image/png",
+              blob: screenshot,
+            },
+          ],
         };
       }
+    }
+
+    const fileResource = await readFileResource(uri, server);
+    if (fileResource) {
+      const { resource, text, blob } = fileResource;
+      return {
+        contents: [
+          {
+            uri: resource.uri,
+            mimeType: resource.mimeType,
+            ...(text ? { text } : { blob }),
+          },
+        ],
+      };
     }
 
     throw new Error(`Resource not found: ${uri}`);

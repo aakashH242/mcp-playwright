@@ -8,14 +8,27 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createToolDefinitions } from "./tools.js";
 import { setupRequestHandlers } from "./requestHandler.js";
+import {
+  configureResourceManager,
+  clearResourcesForServer,
+  getFileResourceById,
+} from "./resourceManager.js";
+import os from "node:os";
+import fs from "node:fs";
+import nodePath from "node:path";
 
 const DEFAULT_PORT = 8000;
 const DEFAULT_PATH = "/mcp";
+const DEFAULT_RESOURCE_TTL_SECONDS = 180;
+const DEFAULT_HOSTNAME = os.hostname();
 
 export interface CliOptions {
   http: boolean;
   port: number;
   path: string;
+  resourceTtlSeconds: number;
+  hostName: string;
+  insecure: boolean;
 }
 
 export function normalizeHttpPath(value: string): string {
@@ -34,6 +47,9 @@ export function parseCliOptions(args: string[]): CliOptions {
     http: false,
     port: DEFAULT_PORT,
     path: DEFAULT_PATH,
+    resourceTtlSeconds: DEFAULT_RESOURCE_TTL_SECONDS,
+    hostName: DEFAULT_HOSTNAME,
+    insecure: false,
   };
 
   const parsePort = (value: string) => {
@@ -42,6 +58,22 @@ export function parseCliOptions(args: string[]): CliOptions {
       throw new Error(`Invalid port value: ${value}`);
     }
     return port;
+  };
+
+  const parseTtl = (value: string) => {
+    const seconds = Number.parseInt(value, 10);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      throw new Error(`Invalid resource TTL: ${value}`);
+    }
+    return seconds;
+  };
+
+  const parseHost = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      throw new Error("Host name cannot be empty");
+    }
+    return trimmed;
   };
 
   for (let i = 0; i < args.length; i += 1) {
@@ -66,6 +98,26 @@ export function parseCliOptions(args: string[]): CliOptions {
       i += 1;
     } else if (arg.startsWith("--path=")) {
       options.path = normalizeHttpPath(arg.split("=")[1] ?? "");
+    } else if (arg === "--resource-ttl") {
+      const value = args[i + 1];
+      if (!value) {
+        throw new Error("Missing value for --resource-ttl");
+      }
+      options.resourceTtlSeconds = parseTtl(value);
+      i += 1;
+    } else if (arg.startsWith("--resource-ttl=")) {
+      options.resourceTtlSeconds = parseTtl(arg.split("=")[1] ?? "");
+    } else if (arg === "--host-name") {
+      const value = args[i + 1];
+      if (!value) {
+        throw new Error("Missing value for --host-name");
+      }
+      options.hostName = parseHost(value);
+      i += 1;
+    } else if (arg.startsWith("--host-name=")) {
+      options.hostName = parseHost(arg.split("=")[1] ?? "");
+    } else if (arg === "--insecure") {
+      options.insecure = true;
     }
   }
 
@@ -80,7 +132,9 @@ export function createMcpServer(): Server {
     },
     {
       capabilities: {
-        resources: {},
+        resources: {
+          listChanged: true,
+        },
         tools: {},
       },
     }
@@ -118,6 +172,7 @@ function registerShutdown(cleanup?: () => Promise<void>) {
 }
 
 async function runStdioServer() {
+  configureResourceManager({ enabled: false });
   const server = createMcpServer();
   registerShutdown(() => server.close());
 
@@ -128,20 +183,77 @@ async function runStdioServer() {
 export async function startStreamableHttpServer({
   port,
   path,
+  resourceTtlSeconds = DEFAULT_RESOURCE_TTL_SECONDS,
+  hostName = DEFAULT_HOSTNAME,
+  insecure = false,
 }: {
   port: number;
   path: string;
+  resourceTtlSeconds?: number;
+  hostName?: string;
+  insecure?: boolean;
 }) {
+  const sessionByServer = new Map<Server, string>();
+  const normalizedPath = normalizeHttpPath(path);
+  configureResourceManager({
+    enabled: true,
+    ttlSeconds: resourceTtlSeconds,
+    buildResourceUri: ({ server, id, filename }) => {
+      const sessionId = sessionByServer.get(server);
+      if (!sessionId) return undefined;
+      const scheme = insecure ? "http" : "https";
+      const portPart = `:${port}`;
+      const sanitizedFile = encodeURIComponent(filename);
+      return `${scheme}://${hostName}${portPart}${normalizedPath}/resources/${sessionId}/${id}/${sanitizedFile}`;
+    },
+    getSessionId: (server) => sessionByServer.get(server),
+  });
   const sessions: Record<
     string,
     { transport: StreamableHTTPServerTransport; server: Server }
   > = {};
-  const normalizedPath = normalizeHttpPath(path);
-
   const server = createServer(async (req, res) => {
     try {
       const url = req.url ? new URL(req.url, "http://localhost") : null;
       const method = req.method ?? "GET";
+
+      const downloadPrefix = `${normalizedPath}/resources/`;
+      if (url?.pathname.startsWith(downloadPrefix)) {
+        const parts = url.pathname.slice(downloadPrefix.length).split("/");
+        if (parts.length < 2) {
+          res.writeHead(400).end("Invalid download path");
+          return;
+        }
+        const [sessionId, resourceId] = parts;
+        const session = sessions[sessionId];
+        if (!session) {
+          res.writeHead(404).end("Not Found");
+          return;
+        }
+        const fileResource = await getFileResourceById(
+          session.server,
+          resourceId
+        );
+        if (!fileResource) {
+          res.writeHead(404).end("Not Found");
+          return;
+        }
+        try {
+          const stat = await fs.promises.stat(fileResource.filePath);
+          res.writeHead(200, {
+            "content-type": fileResource.mimeType ?? "application/octet-stream",
+            "content-length": stat.size,
+            "content-disposition": `inline; filename="${nodePath.basename(
+              fileResource.name
+            )}"`,
+          });
+          fs.createReadStream(fileResource.filePath).pipe(res);
+        } catch (error) {
+          console.error("Failed to serve download:", error);
+          res.writeHead(500).end("Failed to serve file");
+        }
+        return;
+      }
 
       if (!url || url.pathname !== normalizedPath) {
         res.writeHead(404).end("Not Found");
@@ -206,12 +318,14 @@ export async function startStreamableHttpServer({
           onsessioninitialized: (sessionId: string) => {
             if (transport) {
               sessions[sessionId] = { server: mcpServer, transport };
+              sessionByServer.set(mcpServer, sessionId);
             }
           },
         });
 
         if (transport.sessionId) {
           sessions[transport.sessionId] = { server: mcpServer, transport };
+          sessionByServer.set(mcpServer, transport.sessionId);
         }
 
         transport.onclose = () => {
@@ -222,6 +336,8 @@ export async function startStreamableHttpServer({
           mcpServer.close().catch((error) =>
             console.error("Error closing MCP server:", error)
           );
+          clearResourcesForServer(mcpServer);
+          sessionByServer.delete(mcpServer);
         };
 
         await mcpServer.connect(transport);
@@ -239,7 +355,9 @@ export async function startStreamableHttpServer({
         await session.transport.handleRequest(req, res);
 
         if (method === "DELETE" && session.transport.sessionId) {
+          clearResourcesForServer(session.server);
           delete sessions[session.transport.sessionId];
+          sessionByServer.delete(session.server);
         }
         return;
       }
@@ -308,6 +426,9 @@ async function runServer() {
     await startStreamableHttpServer({
       port: options.port,
       path: options.path,
+      hostName: options.hostName,
+      insecure: options.insecure,
+      resourceTtlSeconds: options.resourceTtlSeconds,
     });
     return;
   }

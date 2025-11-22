@@ -1,24 +1,28 @@
-# Multi-stage Dockerfile for MCP Playwright Server
-# This Dockerfile expects the project to be built before running docker build
-# Run `npm install --omit=dev && npm run build` before building the image
+# Build and runtime image for MCP Playwright Server
+# Uses the Playwright base image which already has browser binaries and deps.
 
-FROM node:20-slim AS base
-
-# Set working directory
+FROM mcr.microsoft.com/playwright:v1.56.1-noble AS base
 WORKDIR /app
 
-# Copy package files for reference
+# Install dependencies and build
 COPY package*.json ./
+COPY tsconfig*.json ./
+COPY src ./src
+RUN npm ci --omit=dev && npm run build
 
-# Copy node_modules from host (production dependencies only)
-# Make sure to run `npm install --omit=dev` before building
-COPY node_modules ./node_modules
+# Runtime stage
+FROM mcr.microsoft.com/playwright:v1.56.1-noble
+WORKDIR /app
+ENV PLAYWRIGHT_HEADLESS=1
 
-# Copy the pre-built application
-COPY dist ./dist
+# Create data directory for streamed resources
+RUN mkdir -p /data
 
-# Expose stdio for MCP communication
-# MCP servers communicate via stdio, so no port exposure needed
+COPY --from=base /app/package*.json ./
+COPY --from=base /app/node_modules ./node_modules
+COPY --from=base /app/dist ./dist
 
-# Run the server
+# Expose HTTP port for streamable mode
+EXPOSE 8000
+
 CMD ["node", "dist/index.js"]

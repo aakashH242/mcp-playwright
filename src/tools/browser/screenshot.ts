@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import type { Page } from 'playwright';
 import { BrowserToolBase } from './base.js';
 import { ToolContext, ToolResponse, createSuccessResponse } from '../common/types.js';
+import { registerFileResource } from '../../resourceManager.js';
 
 const defaultDownloadsPath = path.join(os.homedir(), 'Downloads');
 
@@ -53,6 +54,17 @@ export class ScreenshotTool extends BrowserToolBase {
       const base64Screenshot = screenshot.toString('base64');
 
       const messages = [`Screenshot saved to: ${path.relative(process.cwd(), outputPath)}`];
+      let resourceLink;
+      try {
+        resourceLink = await registerFileResource({
+          filePath: outputPath,
+          name: filename,
+          mimeType: "image/png",
+          server: this.server,
+        });
+      } catch (error) {
+        console.warn("Failed to register screenshot as resource:", error);
+      }
 
       // Handle base64 storage
       if (args.storeBase64 !== false) {
@@ -64,7 +76,10 @@ export class ScreenshotTool extends BrowserToolBase {
         messages.push(`Screenshot also stored in memory with name: '${args.name || 'screenshot'}'`);
       }
 
-      return createSuccessResponse(messages);
+      return {
+        ...createSuccessResponse(messages),
+        ...(resourceLink ? { resourceLinks: [resourceLink] } : {}),
+      };
     });
   }
 

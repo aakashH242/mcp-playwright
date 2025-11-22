@@ -171,7 +171,10 @@ export async function ensureBrowser(browserSettings?: BrowserSettings) {
 
     // Launch new browser if needed
     if (!browser) {
-      const { viewport, userAgent, headless = false, browserType = 'chromium' } = browserSettings ?? {};
+      const envHeadlessDefault = ["1", "true"].includes(
+        String(process.env.PLAYWRIGHT_HEADLESS ?? "").toLowerCase()
+      );
+      const { viewport, userAgent, headless = envHeadlessDefault, browserType = 'chromium' } = browserSettings ?? {};
       
       // If browser type is changing, force a new browser instance
       if (browser && currentBrowserType !== browserType) {
@@ -257,7 +260,10 @@ export async function ensureBrowser(browserSettings?: BrowserSettings) {
     resetBrowserState();
     
     // Try one more time from scratch
-    const { viewport, userAgent, headless = false, browserType = 'chromium' } = browserSettings ?? {};
+    const envHeadlessDefault = ["1", "true"].includes(
+      String(process.env.PLAYWRIGHT_HEADLESS ?? "").toLowerCase()
+    );
+    const { viewport, userAgent, headless = envHeadlessDefault, browserType = 'chromium' } = browserSettings ?? {};
     
     // Use the appropriate browser engine
     let browserInstance;
@@ -363,13 +369,13 @@ export async function handleToolCall(
     // Handle codegen tools
     switch (name) {
       case 'start_codegen_session':
-        return await handleCodegenResult(startCodegenSession.handler(args));
+        return await handleCodegenResult(startCodegenSession.handler(args, { server }));
       case 'end_codegen_session':
-        return await handleCodegenResult(endCodegenSession.handler(args));
+        return await handleCodegenResult(endCodegenSession.handler(args, { server }));
       case 'get_codegen_session':
-        return await handleCodegenResult(getCodegenSession.handler(args));
+        return await handleCodegenResult(getCodegenSession.handler(args, { server }));
       case 'clear_codegen_session':
-        return await handleCodegenResult(clearCodegenSession.handler(args));
+        return await handleCodegenResult(clearCodegenSession.handler(args, { server }));
     }
 
     // Record tool action if there's an active session

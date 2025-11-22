@@ -5,6 +5,7 @@ import { CodegenOptions } from './types.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import type { Browser, Page } from 'playwright';
+import { registerFileResource } from '../../resourceManager.js';
 
 declare global {
   var browser: Browser | undefined;
@@ -39,7 +40,7 @@ export const startCodegenSession: Tool = {
       }
     }
   },
-  handler: async ({ options = {} }: { options?: CodegenOptions }) => {
+  handler: async ({ options = {} }: { options?: CodegenOptions }, context?: { server?: any }) => {
     try {
       // Merge provided options with defaults
       const mergedOptions = { ...DEFAULT_OPTIONS, ...options };
@@ -92,7 +93,7 @@ export const endCodegenSession: Tool = {
     },
     required: ['sessionId']
   },
-  handler: async ({ sessionId }: { sessionId: string }) => {
+  handler: async ({ sessionId }: { sessionId: string }, context?: { server?: any }) => {
     try {
       const recorder = ActionRecorder.getInstance();
       const session = recorder.endSession(sessionId);
@@ -119,6 +120,18 @@ export const endCodegenSession: Tool = {
         throw new Error(`Failed to write test file: ${writeError.message}`);
       }
 
+      let resourceLink;
+      try {
+        resourceLink = await registerFileResource({
+          filePath: result.filePath,
+          name: path.basename(result.filePath),
+          mimeType: 'text/plain',
+          server: context?.server,
+        });
+      } catch (error) {
+        console.warn('Failed to register generated test as resource:', error);
+      }
+
       // Close Playwright browser and cleanup
       try {
         if (global.browser?.isConnected()) {
@@ -137,7 +150,8 @@ export const endCodegenSession: Tool = {
         filePath: absolutePath,
         outputDirectory: outputDir,
         testCode: result.testCode,
-        message: `Generated test file at: ${absolutePath}\nOutput directory: ${outputDir}`
+        message: `Generated test file at: ${absolutePath}\nOutput directory: ${outputDir}`,
+        ...(resourceLink ? { resourceLinks: [resourceLink] } : {})
       };
     } catch (error: any) {
       // Ensure browser cleanup even on error
@@ -170,7 +184,7 @@ export const getCodegenSession: Tool = {
     },
     required: ['sessionId']
   },
-  handler: async ({ sessionId }: { sessionId: string }) => {
+  handler: async ({ sessionId }: { sessionId: string }, _context?: { server?: any }) => {
     const session = ActionRecorder.getInstance().getSession(sessionId);
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
@@ -192,7 +206,7 @@ export const clearCodegenSession: Tool = {
     },
     required: ['sessionId']
   },
-  handler: async ({ sessionId }: { sessionId: string }) => {
+  handler: async ({ sessionId }: { sessionId: string }, _context?: { server?: any }) => {
     const success = ActionRecorder.getInstance().clearSession(sessionId);
     if (!success) {
       throw new Error(`Session ${sessionId} not found`);
