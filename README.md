@@ -96,6 +96,20 @@ Here's the Claude Desktop configuration to use the Playwright server:
 }
 ```
 
+## Streamable HTTP mode
+
+The server supports the MCP Streamable HTTP transport so it can run behind gateways.
+
+- Start in HTTP mode (defaults to port `8000` and path `/mcp`):
+  ```bash
+  npx @executeautomation/playwright-mcp-server --http
+  ```
+- Override the port or path:
+  ```bash
+  npx @executeautomation/playwright-mcp-server --http --port 3000 --path /custom-mcp
+  ```
+
+
 ## Docker Support
 
 The Playwright MCP Server can be run in Docker for isolated and containerized execution.
