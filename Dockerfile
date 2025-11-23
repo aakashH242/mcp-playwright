@@ -1,28 +1,32 @@
-# Build and runtime image for MCP Playwright Server
-# Uses the Playwright base image which already has browser binaries and deps.
-
-FROM mcr.microsoft.com/playwright:v1.56.1-noble AS base
+FROM mcr.microsoft.com/playwright:v1.56.1-noble AS build
 WORKDIR /app
 
-# Install dependencies and build
-COPY package*.json ./
-COPY tsconfig*.json ./
-COPY src ./src
-RUN npm ci --omit=dev && npm run build
+# 1) Copy manifests first for cacheable deps layer
+COPY package.json package-lock.json tsconfig*.json ./
 
-# Runtime stage
-FROM mcr.microsoft.com/playwright:v1.56.1-noble
+# 2) Install deps INCLUDING dev deps, but DO NOT run lifecycle scripts yet
+RUN npm ci --include=dev --ignore-scripts
+
+# 3) Now copy sources
+COPY src ./src
+
+# 4) Build explicitly
+RUN npm run build
+
+# 5) Prune dev deps for slim runtime node_modules
+RUN npm prune --omit=dev && npm cache clean --force
+
+
+FROM mcr.microsoft.com/playwright:v1.56.1-noble AS runtime
 WORKDIR /app
 ENV PLAYWRIGHT_HEADLESS=1
 
-# Create data directory for streamed resources
+# Data dir for resources (mount a volume here in prod)
 RUN mkdir -p /data
 
-COPY --from=base /app/package*.json ./
-COPY --from=base /app/node_modules ./node_modules
-COPY --from=base /app/dist ./dist
+COPY --from=build /app/package.json /app/package-lock.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
 
-# Expose HTTP port for streamable mode
 EXPOSE 8000
-
-CMD ["node", "dist/index.js"]
+ENTRYPOINT ["node", "dist/index.js"]
